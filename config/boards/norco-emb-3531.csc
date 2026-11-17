@@ -1,5 +1,5 @@
-# Rockchip RK3399 DDR3/LPDDR4X eMMC GBE USB3 USB-WiFi PCIe x4 slot
-BOARD_NAME="NORCO EMB-3531"
+# Rockchip RK3399 hexa core 2GB/4GB DDR3/LPDDR4X eMMC GBE USB3 USB-WiFi PCIe x4 slot
+BOARD_NAME="EMB-3531"
 BOARD_VENDOR="norco"
 BOARDFAMILY="rockchip64"
 BOARD_MAINTAINER="retro98boy"
@@ -38,9 +38,7 @@ function post_family_tweaks_bsp__norco-emb-3531() {
 	install -Dm644 "${SRC}/packages/bsp/norco-emb-3531/emb-3531.conf" \
 		"${destination}/usr/share/alsa/ucm2/Rockchip/emb-3531/emb-3531.conf"
 
-	if [ ! -d "${destination}/usr/share/alsa/ucm2/conf.d/simple-card" ]; then
-		mkdir -p "${destination}/usr/share/alsa/ucm2/conf.d/simple-card"
-	fi
-	ln -sfv /usr/share/alsa/ucm2/Rockchip/emb-3531/emb-3531.conf \
+	mkdir -p "${destination}/usr/share/alsa/ucm2/conf.d/simple-card"
+	ln -sfv ../../Rockchip/emb-3531/emb-3531.conf \
 		"${destination}/usr/share/alsa/ucm2/conf.d/simple-card/emb-3531.conf"
 }

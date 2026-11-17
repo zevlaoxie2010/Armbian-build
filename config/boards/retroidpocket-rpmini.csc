@@ -1,5 +1,5 @@
-# Retroid Pocket RPMini Configuration
-declare -g BOARD_NAME="Retroid Pocket RPMini"
+# Qualcomm SM8250 Snapdragon 865 octa core 6GB RAM 128GB UFS WiFi6/BT handheld
+declare -g BOARD_NAME="Pocket RPMini"
 declare -g BOARD_VENDOR="retroid"
 declare -g BOARD_MAINTAINER=""
 declare -g INTRODUCED="2024"
@@ -25,7 +25,6 @@ declare -g BOARD_FIRMWARE_INSTALL="-full"
 
 function retroidpocket-rpmini_is_userspace_supported() {
 	[[ "${RELEASE}" == "bookworm" ]] && return 0
-	[[ "${RELEASE}" == "jammy" ]] && return 0
 	[[ "${RELEASE}" == "noble" ]] && return 0
 	[[ "${RELEASE}" == "trixie" ]] && return 0
 	return 1
@@ -87,9 +86,9 @@ function post_family_config__retroidpocket-rpmini_extra_packages() {
 	fi
 
 	display_alert "Setting up extra packages for ${BOARD}" "${RELEASE}" "info"
-	add_packages_to_image "bluez" "bluetooth"        # for bluetooth stuff
-	add_packages_to_image "mtools"                   # for access to the EFI partition
-	add_packages_to_image "zstd"                     # for zstd compression of initrd
+	add_packages_to_image "bluez" "bluetooth" # for bluetooth stuff
+	add_packages_to_image "mtools"            # for access to the EFI partition
+	add_packages_to_image "zstd"              # for zstd compression of initrd
 }
 
 function post_family_tweaks_bsp__retroidpocket-rpmini_bsp_firmware_in_initrd() {

@@ -1,3 +1,6 @@
+# @description Enables ccache with a remote Redis or HTTP/WebDAV backend so the compilation cache is shared across build hosts, and enables the `ccache` extension it builds on. Set `CCACHE_REMOTE_STORAGE` explicitly, or let it auto-discover a server via DNS-SD/Avahi, DNS SRV (`CCACHE_REMOTE_DOMAIN`) or legacy `ccache.local`. Requires ccache 4.4+ and identical project paths on every host.
+# @doc-page /build-framework/extensions/ccache-remote/
+
 # Extension: ccache-remote
 # Enables ccache with remote storage for sharing compilation cache across build hosts.
 # Supports Redis and HTTP/WebDAV backends (ccache 4.4+).
@@ -23,7 +26,7 @@
 #   # Disable local cache, use remote only (saves local disk space):
 #   ./compile.sh ENABLE_EXTENSIONS=ccache-remote CCACHE_REMOTE_ONLY=yes BOARD=...
 #
-# Automatically sets USE_CCACHE=yes
+# Automatically enables the `ccache` backend extension and sets PRIVATE_CCACHE=yes.
 #
 # Supported ccache environment variables (passed through to builds):
 # See: https://ccache.dev/manual/latest.html#_configuration_options
@@ -103,6 +106,9 @@
 #   This is because ccache includes the working directory in the cache key.
 #   Docker builds automatically use consistent paths (/armbian/...).
 
+# ccache-remote is a storage layer over the ccache backend, not a backend itself.
+enable_extension "ccache"
+
 # Default Redis connection timeout in milliseconds (can be overridden by user)
 # Note: Must be set before extension loads (e.g., via environment or command line)
 declare -g -r CCACHE_REDIS_CONNECT_TIMEOUT="${CCACHE_REDIS_CONNECT_TIMEOUT:-500}"
@@ -165,9 +171,9 @@ function ccache_extract_url_host() {
 # Sets CCACHE_REMOTE_STORAGE on success, returns 1 if nothing found.
 function ccache_discover_remote_storage() {
 	# Method 1: DNS-SD browse on local network (requires avahi-browse)
-	if command -v avahi-browse &>/dev/null; then
+	if command -v avahi-browse &> /dev/null; then
 		local browse_output
-		browse_output=$(timeout 5 avahi-browse -rpt _ccache._tcp 2>/dev/null || true)
+		browse_output=$(timeout 5 avahi-browse -rpt _ccache._tcp 2> /dev/null || true)
 		if [[ -n "${browse_output}" ]]; then
 			# Parse resolved lines: =;IFACE;PROTO;NAME;TYPE;DOMAIN;HOSTNAME;ADDRESS;PORT;"txt"...
 			# Prefer IPv4 (proto=IPv4), prefer type=redis over type=http
@@ -250,9 +256,9 @@ function ccache_discover_remote_storage() {
 	fi
 
 	# Method 2: DNS SRV record for remote setups (CCACHE_REMOTE_DOMAIN must be set)
-	if [[ -n "${CCACHE_REMOTE_DOMAIN}" ]] && command -v dig &>/dev/null; then
+	if [[ -n "${CCACHE_REMOTE_DOMAIN}" ]] && command -v dig &> /dev/null; then
 		local srv_output
-		srv_output=$(dig +short SRV "_ccache._tcp.${CCACHE_REMOTE_DOMAIN}" 2>/dev/null || true)
+		srv_output=$(dig +short SRV "_ccache._tcp.${CCACHE_REMOTE_DOMAIN}" 2> /dev/null || true)
 		if [[ -n "${srv_output}" ]]; then
 			local srv_port srv_host
 			# SRV format: priority weight port target
@@ -261,7 +267,7 @@ function ccache_discover_remote_storage() {
 			if [[ -n "${srv_host}" && -n "${srv_port}" ]]; then
 				# Check TXT record for service type, path, and optional password.
 				local txt_output svc_type="redis" svc_path="" svc_password=""
-				txt_output=$(dig +short TXT "_ccache._tcp.${CCACHE_REMOTE_DOMAIN}" 2>/dev/null || true)
+				txt_output=$(dig +short TXT "_ccache._tcp.${CCACHE_REMOTE_DOMAIN}" 2> /dev/null || true)
 				if [[ "${txt_output}" =~ type=([a-z]+) ]]; then
 					svc_type="${BASH_REMATCH[1]}"
 				fi
@@ -303,7 +309,7 @@ function ccache_discover_remote_storage() {
 
 	# Method 3: Legacy fallback - resolve ccache.local hostname
 	local ccache_ip
-	ccache_ip=$(getent hosts ccache.local 2>/dev/null | awk '{print $1; exit}' || true)
+	ccache_ip=$(getent hosts ccache.local 2> /dev/null | awk '{print $1; exit}' || true)
 	if [[ -n "${ccache_ip}" ]]; then
 		local host_port
 		host_port=$(ccache_format_host_port "${ccache_ip}" "6379")
@@ -322,18 +328,18 @@ function ccache_get_redis_stats() {
 	local password="$3"
 	local stats=""
 
-	if command -v redis-cli &>/dev/null; then
+	if command -v redis-cli &> /dev/null; then
 		local auth_args=()
 		[[ -n "${password}" ]] && auth_args+=(-a "${password}" --no-auth-warning)
 		local keys mem
-		keys=$(timeout 2 redis-cli -h "$ip" -p "$port" "${auth_args[@]}" DBSIZE 2>/dev/null | grep -oE '[0-9]+' || true)
-		mem=$(timeout 2 redis-cli -h "$ip" -p "$port" "${auth_args[@]}" INFO memory 2>/dev/null | grep "used_memory_human" | cut -d: -f2 | tr -d '[:space:]' || true)
+		keys=$(timeout 2 redis-cli -h "$ip" -p "$port" "${auth_args[@]}" DBSIZE 2> /dev/null | grep -oE '[0-9]+' || true)
+		mem=$(timeout 2 redis-cli -h "$ip" -p "$port" "${auth_args[@]}" INFO memory 2> /dev/null | grep "used_memory_human" | cut -d: -f2 | tr -d '[:space:]' || true)
 		if [[ -n "$keys" ]]; then
 			stats="keys=${keys:-0}, mem=${mem:-?}"
 		fi
 	else
 		# Fallback: try netcat for basic connectivity check
-		if nc -z -w 2 "$ip" "$port" 2>/dev/null; then
+		if nc -z -w 2 "$ip" "$port" 2> /dev/null; then
 			stats="reachable (redis-cli not installed for detailed stats)"
 		fi
 	fi
@@ -345,7 +351,7 @@ function ccache_get_http_stats() {
 	local url="$1"
 	local stats=""
 	local http_code
-	http_code=$(timeout 3 curl -s -o /dev/null -w "%{http_code}" -X HEAD "${url}" 2>/dev/null || true)
+	http_code=$(timeout 3 curl -s -o /dev/null -w "%{http_code}" -X HEAD "${url}" 2> /dev/null || true)
 	if [[ -n "${http_code}" && "${http_code}" != "000" ]]; then
 		stats="reachable (HTTP ${http_code})"
 	fi
@@ -458,8 +464,8 @@ function host_pre_docker_launch__setup_remote_ccache() {
 				local _resolved_ip="${CCACHE_REMOTE_HOST_IP:-}"
 				# If not from discovery, resolve now; prefer IPv4 (Docker bridge often lacks IPv6)
 				if [[ -z "${_resolved_ip}" || "${CCACHE_REMOTE_HOST}" != "${_host}" ]]; then
-					_resolved_ip=$(getent ahostsv4 "${_host}" 2>/dev/null | awk '{print $1; exit}' || true)
-					[[ -z "${_resolved_ip}" ]] && _resolved_ip=$(getent hosts "${_host}" 2>/dev/null | awk '{print $1; exit}' || true)
+					_resolved_ip=$(getent ahostsv4 "${_host}" 2> /dev/null | awk '{print $1; exit}' || true)
+					[[ -z "${_resolved_ip}" ]] && _resolved_ip=$(getent hosts "${_host}" 2> /dev/null | awk '{print $1; exit}' || true)
 				fi
 				if [[ -n "${_resolved_ip}" ]]; then
 					# Hostname resolves to loopback on host — service runs locally, use host-gateway for Docker
@@ -507,10 +513,8 @@ function ccache_post_compilation__show_remote_stats() {
 
 # This runs inside Docker (or native build) during configuration
 function extension_prepare_config__setup_remote_ccache() {
-	# Enable ccache with a consistent cache directory ($SRC/cache/ccache).
 	# PRIVATE_CCACHE ensures the same CCACHE_DIR is used in native and Docker builds,
 	# avoiding fragmented caches in /root/.cache/ccache vs $SRC/cache/ccache.
-	declare -g USE_CCACHE=yes
 	declare -g PRIVATE_CCACHE=yes
 
 	# If CCACHE_REMOTE_STORAGE was passed from host (via Docker env), it's already set

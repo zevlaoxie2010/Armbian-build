@@ -1,5 +1,5 @@
 # Amlogic A311D 2GB RAM 16GB eMMC GBE USB3 RTL8822CS WiFi/BT
-BOARD_NAME="CAINIAO CNIoT-CORE"
+BOARD_NAME="CNIoT-CORE"
 BOARD_VENDOR="cainiao"
 BOARDFAMILY="meson-g12b"
 BOARD_MAINTAINER="retro98boy"
@@ -47,9 +47,7 @@ function post_family_tweaks_bsp__cainiao-cniot-core() {
 	install -Dm644 "${SRC}/packages/bsp/cainiao-cniot-core/cniot-core.conf" \
 		"${destination}/usr/share/alsa/ucm2/Amlogic/axg-sound-card/cniot-core.conf"
 
-	if [ ! -d "${destination}/usr/share/alsa/ucm2/conf.d/axg-sound-card" ]; then
-		mkdir -p "${destination}/usr/share/alsa/ucm2/conf.d/axg-sound-card"
-	fi
-	ln -sfv /usr/share/alsa/ucm2/Amlogic/axg-sound-card/cniot-core.conf \
+	mkdir -p "${destination}/usr/share/alsa/ucm2/conf.d/axg-sound-card"
+	ln -sfv ../../Amlogic/axg-sound-card/cniot-core.conf \
 		"${destination}/usr/share/alsa/ucm2/conf.d/axg-sound-card/cniot-core.conf"
 }

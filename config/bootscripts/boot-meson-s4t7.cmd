@@ -11,9 +11,6 @@ setenv bootlogo "false"
 setenv displaymode "1080p60hz"
 setenv force_16x9_display "false"
 
-# Show what uboot default fdtfile is
-echo "U-boot default fdtfile: ${fdtfile}"
-
 if test -e ${devtype} ${devnum} ${prefix}armbianEnv.txt; then
 	load ${devtype} ${devnum} ${loadaddr} ${prefix}armbianEnv.txt
 	env import -t ${loadaddr} ${filesize}
@@ -24,41 +21,32 @@ if test "${console}" = "serial"; then setenv console_serial "true"; fi
 if test "${console}" = "display"; then setenv console_display "true"; fi
 
 if test "${console_display}" = "true"; then setenv consoleargs "console=tty0"; fi
-if test "${console_serial}" = "true"; then setenv consoleargs "console=ttyS0,921600 ${consoleargs}"; fi
+if test "${console_serial}" = "true"; then setenv consoleargs "console=ttyS0,921600n8"; fi
 
-if test "${earlycon}" != "on"; then
-	setexpr bootargs sub " earlycon=\\S* " " " "${bootargs}"
-fi
+if test "${earlycon}" != "on"; then setexpr bootargs sub " earlycon=\\S* " " " "${bootargs}"; fi
 
 if test "${bootlogo}" = "true"; then
 	setenv plymouthargs "splash plymouth.ignore-serial-consoles"
-else
-	setenv plymouthargs "splash=verbose"
 fi
 
-setenv bootargs "${bootargs} root=${rootdev} rootfstype=${rootfstype} rw fsck.repair=yes rootwait ${consoleargs} partition_type=generic loglevel=${verbosity} ${plymouthargs} ${extraargs} ${extraboardargs}"
+setenv bootargs "${consoleargs} root=${rootdev} rootfstype=${rootfstype} rw fsck.repair=yes rootwait loglevel=${verbosity} ${extraargs} ${plymouthargs}"
 
 load ${devtype} ${devnum} ${fdt_addr_r} ${prefix}dtb/${fdtfile}
 fdt addr ${fdt_addr_r}
 fdt resize 65536
 
-if test "${mipi_lcd_exist}" = "0"; then
-	fdt set /lcd status disabled
-	fdt set /lcd1 status disabled
-	fdt set /lcd2 status disabled
-	fdt set /soc/apb4@fe000000/i2c@6c000/gt9xx@14 status disabled
-	fdt set /soc/apb4@fe000000/i2c@6c000/ft5336@38 status disabled
-else
-	if test "${panel_type}" = "mipi_1"; then
-		fdt set /drm-subsystem fbdev_sizes <1920 1200 1920 2400 32>
-	else
-		fdt set /drm-subsystem fbdev_sizes <1080 1920 1080 3840 32>
-	fi
-fi
-
+# overlay_prefix holds one or more prefixes. The first match wins. Full overlay names also work.
 for overlay_file in ${overlays}; do
-	if load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_prefix}-${overlay_file}.dtbo; then
-		echo "Applying kernel provided DT overlay ${overlay_prefix}-${overlay_file}.dtbo"
+	setenv overlay_found "false"
+	for overlay_prefix_item in ${overlay_prefix}; do
+		if test "${overlay_found}" = "false" && test -e ${devtype} ${devnum} ${prefix}dtb/amlogic/overlay/${overlay_prefix_item}-${overlay_file}.dtbo && load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_prefix_item}-${overlay_file}.dtbo; then
+			setenv overlay_found "true"
+			echo "Applying kernel provided DT overlay ${overlay_prefix_item}-${overlay_file}.dtbo"
+			fdt apply ${scriptaddr} || setenv overlay_error "true"
+		fi
+	done
+	if test "${overlay_found}" = "false" && test -e ${devtype} ${devnum} ${prefix}dtb/amlogic/overlay/${overlay_file}.dtbo && load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_file}.dtbo; then
+		echo "Applying kernel provided DT overlay ${overlay_file}.dtbo"
 		fdt apply ${scriptaddr} || setenv overlay_error "true"
 	fi
 done
@@ -74,10 +62,12 @@ if test "${overlay_error}" = "true"; then
 	echo "Error applying DT overlays, restoring original DT"
 	load ${devtype} ${devnum} ${fdt_addr_r} ${prefix}dtb/${fdtfile}
 else
-	if load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_prefix}-fixup.scr; then
-		echo "Applying kernel provided DT fixup script (${overlay_prefix}-fixup.scr)"
-		source ${scriptaddr}
-	fi
+	for overlay_prefix_item in ${overlay_prefix}; do
+		if test -e ${devtype} ${devnum} ${prefix}dtb/amlogic/overlay/${overlay_prefix_item}-fixup.scr && load ${devtype} ${devnum} ${scriptaddr} ${prefix}dtb/amlogic/overlay/${overlay_prefix_item}-fixup.scr; then
+			echo "Applying kernel provided DT fixup script (${overlay_prefix_item}-fixup.scr)"
+			source ${scriptaddr}
+		fi
+	done
 	if test -e ${devtype} ${devnum} ${prefix}fixup.scr; then
 		load ${devtype} ${devnum} ${scriptaddr} ${prefix}fixup.scr
 		echo "Applying user provided fixup script (fixup.scr)"
@@ -85,11 +75,19 @@ else
 	fi
 fi
 
+# Khadas U-Boot reads the board MAC address from eFuse into eth_mac.
+# Mainline kernels take the MAC address only from the DT.
+if test -n "${eth_mac}"; then
+	setexpr eth_mac_dt gsub : " " "${eth_mac}"
+	fdt set /ethernet@fdc00000 local-mac-address "[${eth_mac_dt}]" || fdt set /soc/ethernet@fdc00000 local-mac-address "[${eth_mac_dt}]"
+fi
+
 # The symlinks for kernel and initrd.img are at different locations in debian and ubuntu
 # Check and load from a location that exists
 load ${devtype} ${devnum} ${kernel_addr_r} ${prefix}Image
-load ${devtype} ${devnum} ${ramdisk_addr_r} ${prefix}Initrd
+load ${devtype} ${devnum} ${ramdisk_addr_r} ${prefix}uInitrd
+echo "Booting from ${devtype} ${devnum}:${distro_bootpart}..."
 booti ${kernel_addr_r} ${ramdisk_addr_r}:${filesize} ${fdt_addr_r}
 
 # Recompile with:
-# mkimage -C none -A arm -T script -d /boot/boot.cmd /boot/boot.scr
+# mkimage -C none -A arm64 -T script -d /boot/boot.cmd /boot/boot.scr

@@ -188,9 +188,13 @@ function compile_uboot_target() {
 	local -a uboot_cflags_array=(
 		"-fdiagnostics-color=always" # color messages
 		"-Wno-error=maybe-uninitialized"
-		"-Wno-error=misleading-indentation"   # patches have mismatching indentation
-		"-Wno-error=attributes"               # for very old-uboots
-		"-Wno-error=address-of-packed-member" # for very old-uboots
+		"-Wno-error=misleading-indentation"        # patches have mismatching indentation
+		"-Wno-error=attributes"                    # for very old-uboots
+		"-Wno-error=address-of-packed-member"      # for very old-uboots
+		"-Wno-error=implicit-function-declaration" # gcc >= 14 (trixie) makes these hard errors; old u-boots miss #include <env.h> etc.
+		"-Wno-error=implicit-int"                  # companion to the above on gcc >= 14
+		"-Wno-error=int-conversion"                # gcc >= 14 hard error; vendor u-boots (e.g. Realtek rtd16xxb) assign ptr<->int
+		"-Wno-error=incompatible-pointer-types"    # gcc >= 14 hard error; vendor driver callback signatures mismatch
 	)
 	if linux-version compare "${gcc_version_main}" ge "11.0"; then
 		uboot_cflags_array+=(
@@ -270,11 +274,13 @@ function compile_uboot_target() {
 
 	display_alert "${uboot_prefix}Compiling u-boot" "${version} ${target_make} with gcc '${gcc_version_main}'" "info"
 	declare -g if_error_detail_message="${uboot_prefix}Failed to build u-boot ${version} ${target_make}"
-	do_with_ccache_statistics run_host_command_logged_long_running \
+	do_with_compile_wrapper run_host_command_logged_long_running \
 		"env" "-i" "${uboot_make_envs[@]}" \
 		pipetty make "$target_make" "$CTHREADS" "${cross_compile}"
 
 	display_alert "${uboot_prefix}built u-boot target" "${version} in $((SECONDS - ts)) seconds" "info"
+
+	report_uboot_spl_size_usage
 
 	# Save a defconfig, as that will be included as reference in the .deb package
 	# Do not fail here; some very (very!) old u-boots like 2011 do not have 'savedefconfig'
@@ -323,6 +329,43 @@ function compile_uboot_target() {
 	fi
 
 	display_alert "${uboot_prefix}Done with u-boot target" "${version} ${target_make}"
+	return 0
+}
+
+# Report SPL/TPL size against CONFIG_*_MAX_SIZE and CONFIG_*_SIZE_LIMIT. Warn when close.
+function report_uboot_spl_size_usage() {
+	[[ -f .config ]] || return 0
+	declare -i warn_percent=90
+	[[ "${UBOOT_SPL_SIZE_WARN_PERCENT:-}" =~ ^[0-9]+$ ]] && warn_percent="$((10#${UBOOT_SPL_SIZE_WARN_PERCENT}))"
+	declare stage prefix kind value bin
+	declare -i size limit percent
+	for stage in SPL TPL; do
+		prefix="${stage,,}"
+		# MAX_SIZE: the linker checks the image without the device tree.
+		# SIZE_LIMIT: the Makefile checks the final .bin, device tree included.
+		for kind in MAX_SIZE SIZE_LIMIT; do
+			value="$(sed -n "s/^CONFIG_${stage}_${kind}=//p" .config)"
+			[[ "${value}" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]] || continue
+			limit=$((value))
+			# The Makefile subtracts reserved space from the SPL limit; this tool prints the result.
+			if [[ "${stage}_${kind}" == SPL_SIZE_LIMIT && -x tools/spl_size_limit ]]; then
+				limit="$(tools/spl_size_limit)"
+			fi
+			((limit > 0)) || continue
+			bin="${prefix}/u-boot-${prefix}.bin"
+			if [[ "${kind}" == MAX_SIZE && -f "${prefix}/u-boot-${prefix}-nodtb.bin" ]]; then
+				bin="${prefix}/u-boot-${prefix}-nodtb.bin"
+			fi
+			[[ -f "${bin}" ]] || continue
+			size=$(stat -c %s "${bin}")
+			percent=$((size * 100 / limit))
+			if ((percent >= warn_percent)); then
+				display_alert "${uboot_prefix:-}u-boot ${stage} size close to CONFIG_${stage}_${kind}" "${size} / ${limit} bytes (${percent}%)" "warn"
+			else
+				display_alert "${uboot_prefix:-}u-boot ${stage} size vs CONFIG_${stage}_${kind}" "${size} / ${limit} bytes (${percent}%)" "info"
+			fi
+		done
+	done
 	return 0
 }
 
@@ -509,6 +552,10 @@ function compile_uboot() {
 		# Armbian u-boot install script for linux-u-boot-${BOARD}-${BRANCH} ${artifact_version}
 		# This file provides functions for deploying u-boot to a block device.
 		DIR=/usr/lib/$uboot_name
+		${BOOTLOADER_BOOTS_FROM:+BOOTLOADER_BOOTS_FROM=\"${BOOTLOADER_BOOTS_FROM}\"}
+		${BOOTLOADER_MTD_IMAGE:+BOOTLOADER_MTD_IMAGE=\"${BOOTLOADER_MTD_IMAGE}\"}
+		${BOOTLOADER_MTD_IMAGE_SATA:+BOOTLOADER_MTD_IMAGE_SATA=\"${BOOTLOADER_MTD_IMAGE_SATA}\"}
+		${OFFSET:+BOOTLOADER_RESERVED_MIB=\"${OFFSET}\"}
 		$(declare -f write_uboot_platform || true)
 		$(declare -f write_uboot_platform_mtd || true)
 		$(declare -f write_uboot_platform_ufs || true)

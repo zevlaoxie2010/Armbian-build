@@ -28,12 +28,12 @@ jobs:
 
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
 
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -42,18 +42,28 @@ jobs:
         uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v46.0.5
 
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: a13xp0p0v/kconfig-hardened-check
           path: kconfig-hardened-check
 
+      - name: Install kconfig build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq flex bison
+
       - name: Check kernel config for security issues
-        # Run kernel-hardening-checker for each kernel config file excluding RISC-V configs, since they are not supported yet.
-        # See https://github.com/a13xp0p0v/kernel-hardening-checker/issues/56
+        # Kernel configs are defconfigs. The checker needs a full .config, so expand each one first.
         # sed explanation: 1) Put spaces in front of every line 2) replace colored output with emojis since GitHub Actions job summaries don't support colored output
+        # shell: bash sets pipefail, so a checker failure gives the warning
+        shell: bash
         run: |
           for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-              if [[ "${file}" = config/kernel/*.config && ! $(head -n 10 "${file}" | grep -q "riscv") ]]; then
-                  kconfig-hardened-check/bin/kernel-hardening-checker -m show_fail -c $file | sed 's/^/     /; s/\x1b\[32m/✅ /; s/\x1b\[31m/❌ /; s/\x1b\[0m//' >> $GITHUB_STEP_SUMMARY
+              [[ "${file}" == config/kernel/*.config ]] || continue
+              full="${RUNNER_TEMP}/$(basename "${file}")"
+              echo "### ${file}" >> $GITHUB_STEP_SUMMARY
+              if ! .github/expand_kernel_defconfig.sh "${file}" "${full}"; then
+                  echo "⚠️ Cannot expand to a full config, not checked" >> $GITHUB_STEP_SUMMARY
+                  continue
               fi
+              kconfig-hardened-check/bin/kernel-hardening-checker -m show_fail -c "${full}" | sed 's/^/     /; s/\x1b\[32m/✅ /; s/\x1b\[31m/❌ /; s/\x1b\[0m//' >> $GITHUB_STEP_SUMMARY ||
+                  echo "⚠️ Checker failed (architecture not supported?)" >> $GITHUB_STEP_SUMMARY
           done

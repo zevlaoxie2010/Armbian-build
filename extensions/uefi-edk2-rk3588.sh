@@ -1,3 +1,5 @@
+# @description Integrates edk2-porting UEFI/EDK2 firmware for Rockchip RK3588 boards, enabling `grub-with-dtb` and `initramfs-usb-gadget-ums`, forcing a GPT layout and defaulting `GRUB_CMDLINE_LINUX_DEFAULT` to `acpi=off` when it is unset. Downloads the latest `edk2-porting/edk2-rk3588` release image and `dd`s it onto the loop device, then creates a `uboot` partition for SPL. Requires `UEFI_EDK2_BOARD_ID` to be set.
+
 #
 # SPDX-License-Identifier: GPL-2.0
 # Copyright (c) 2023 Ricardo Pardini <ricardo@pardini.net>
@@ -24,9 +26,9 @@ function extension_prepare_config__config_uefi_edk2_rk3588() {
 		declare -g IMAGE_PARTITION_TABLE="gpt"
 	fi
 
-	# If BOOTFS_TYPE is set, warn and unset it.
-	if [[ -n "${BOOTFS_TYPE}" ]]; then
-		display_alert "Unsetting BOOTFS_TYPE" "UEFI EDK2 requires BOOTFS_TYPE to be unset, but is set to '${BOOTFS_TYPE}'" "warn"
+	# If BOOTFS_TYPE is set, warn and unset it. GRUB reads an ext2/ext4 /boot, so keep that.
+	if [[ -n "${BOOTFS_TYPE}" && "${BOOTFS_TYPE}" != ext[24] ]]; then
+		display_alert "Unsetting BOOTFS_TYPE" "UEFI EDK2 supports only an ext2/ext4 BOOTFS_TYPE, but it is set to '${BOOTFS_TYPE}'" "warn"
 		unset BOOTFS_TYPE
 	fi
 
@@ -41,9 +43,8 @@ function post_umount_final_image__write_edk2_to_image() {
 	display_alert "Finding edk2 latest version" "from GitHub" "info"
 
 	# Find the latest version of edk2-porting from GitHub, using JSON API, curl and jq.
-	declare api_url="https://api.github.com/repos/edk2-porting/edk2-rk3588/releases/latest"
 	declare latest_version
-	latest_version=$(curl -s "${api_url}" | jq -r '.tag_name')
+	latest_version="$(github_latest_release_tag "edk2-porting/edk2-rk3588")" || return 1
 	display_alert "Latest version of edk2-porting is" "${latest_version}" "info"
 
 	# Prepare the cache dir

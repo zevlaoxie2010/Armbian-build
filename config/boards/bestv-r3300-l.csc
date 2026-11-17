@@ -1,5 +1,5 @@
 # Amlogic S905L-B 1GB RAM 8GB eMMC microSD FE USB2 RTL8189FTV WiFi
-BOARD_NAME="BesTV R3300-L"
+BOARD_NAME="R3300-L"
 BOARD_VENDOR="bestv"
 BOARDFAMILY="meson-gxl"
 BOARD_MAINTAINER="retro98boy"
@@ -47,9 +47,7 @@ function post_family_tweaks_bsp__bestv-r3300-l() {
 	install -Dm644 "${SRC}/packages/bsp/S905X-P212/S905X-P212.conf" \
 		"${destination}/usr/share/alsa/ucm2/Amlogic/gx-sound-card/S905X-P212.conf"
 
-	if [ ! -d "${destination}/usr/share/alsa/ucm2/conf.d/gx-sound-card" ]; then
-		mkdir -p "${destination}/usr/share/alsa/ucm2/conf.d/gx-sound-card"
-	fi
-	ln -sfv /usr/share/alsa/ucm2/Amlogic/gx-sound-card/S905X-P212.conf \
+	mkdir -p "${destination}/usr/share/alsa/ucm2/conf.d/gx-sound-card"
+	ln -sfv ../../Amlogic/gx-sound-card/S905X-P212.conf \
 		"${destination}/usr/share/alsa/ucm2/conf.d/gx-sound-card/S905X-P212.conf"
 }

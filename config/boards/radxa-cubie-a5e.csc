@@ -1,4 +1,4 @@
-# Allwinner Cortex-A55 octa core SoC 2/4GB-RAM, 2x GBe, WiFi/BT, M.2 2230/USB3, NPU
+# Allwinner A527 octa core 1/2/4GB RAM 0-32GB eMMC 2x GBE WiFi6/BT M.2 2230 NVMe/USB3 HDMI
 BOARD_NAME="Cubie A5E"
 BOARD_VENDOR="radxa"
 BOARDFAMILY="sun55iw3"
@@ -10,7 +10,15 @@ OVERLAY_PREFIX="sun55i-a527"
 KERNEL_TARGET="current,edge"
 KERNEL_TEST_TARGET="current,edge"
 BOOT_FDT_FILE="sun55i-a527-cubie-a5e.dtb"
-HAS_VIDEO_OUTPUT=no
+HAS_VIDEO_OUTPUT="yes"
+
+# GPT is overwritten by the eGON bootloader image at 0x2000 (issue #10647):
+# use msdos partition table with the boot partition after the bootloader
+IMAGE_PARTITION_TABLE="msdos"
+BOOTFS_TYPE="fat"
+BOOTSTART="8192"
+BOOTSIZE="512"
+ROOTSTART="1056768"
 
 PACKAGE_LIST_BOARD="rfkill bluetooth bluez bluez-tools"
 
@@ -25,15 +33,15 @@ function post_family_tweaks_bsp__aic8800_wireless() {
 	mkdir -p "${destination}"/etc/modules-load.d
 	# Add wireless conf
 	cat > "${destination}"/etc/modprobe.d/aic8800-radxa-cubie-a5e.conf <<- EOT
-	options aic8800_fdrv_sdio aicwf_dbg_level=0 custregd=0 ps_on=0
-	options aic8800_bsp aic_fw_path=/lib/firmware/aic8800/SDIO/aic8800D80
+		options aic8800_fdrv_sdio aicwf_dbg_level=0 custregd=0 ps_on=0
+		options aic8800_bsp aic_fw_path=/lib/firmware/aic8800/SDIO/aic8800D80
 	EOT
 	# Add needed bluetooth modules
 	cat > "${destination}"/etc/modules-load.d/aic8800-btlpm.conf <<- EOT
-	hidp
-	rfcomm
-	bnep
-	aic8800_btlpm_sdio
+		hidp
+		rfcomm
+		bnep
+		aic8800_btlpm_sdio
 	EOT
 	# Add AIC8800 Bluetooth Service and Script
 	if [[ -d "$SRC/packages/bsp/aic8800" ]]; then

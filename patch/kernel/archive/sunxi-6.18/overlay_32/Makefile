@@ -41,6 +41,9 @@ dtb-$(CONFIG_MACH_SUN7I) += \
 	sun7i-a20-i2c2.dtbo \
 	sun7i-a20-i2c3.dtbo \
 	sun7i-a20-i2c4.dtbo \
+	sun7i-a20-lemaker-lcd5.dtbo \
+	sun7i-a20-lemaker-lcd7.dtbo \
+	sun7i-a20-lemaker-lcd7-hdmi.dtbo \
 	sun7i-a20-mmc2.dtbo \
 	sun7i-a20-nand.dtbo \
 	sun7i-a20-pps-gpio.dtbo \
@@ -75,6 +78,7 @@ dtb-$(CONFIG_MACH_SUN8I) += \
 	sun8i-h3-uart1.dtbo \
 	sun8i-h3-uart2.dtbo \
 	sun8i-h3-uart3.dtbo \
+	sun8i-h3-tve.dtbo \
 	sun8i-h3-usbhost0.dtbo \
 	sun8i-h3-usbhost1.dtbo \
 	sun8i-h3-usbhost2.dtbo \

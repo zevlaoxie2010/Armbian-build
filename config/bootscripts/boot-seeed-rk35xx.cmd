@@ -2,6 +2,11 @@
 #
 # Please edit /boot/armbianEnv.txt to set supported parameters
 #
+# Used by Seeed reComputer RK35xx boards:
+#   - recomputer-rk3588-devkit        (RK3588)
+#   - recomputer-rk3576-module-devkit (RK3576)
+#   - recomputer-rk3576-industrial    (RK3576 industrial carrier)
+#
 
 # Use U-Boot's per-SoC overlay address as scratch buffer.
 # RK3576: 0x48200000, RK3588: 0x08200000 (set in ENV_MEM_LAYOUT_SETTINGS)
@@ -24,37 +29,78 @@ echo "Boot script loaded from ${devtype} ${devnum}:${distro_bootpart}"
 # Load armbianEnv.txt with corruption detection and .dist fallback.
 # Power loss can fill the file with 0xFF (eMMC erased block) or ^@ (NUL,
 # on other storage media) which passes "env import -t" without error but
-# imports zero variables. Clear rootdev before import; if it remains
-# empty, the file was corrupt.
+# imports zero variables. Editor-induced CRLF pollution keeps a trailing
+# \r in every value with plain "env import -t"; "env import -t -r"
+# strips it at import (device-verified on the Radxa next-dev-v2024.10
+# U-Boot these boards ship - the banner says 2017.09 because Rockchip
+# pins the version in the Makefile, the code is much newer).
+# Clear rootdev and fdtfile so a stale built-in value can't satisfy the
+# probe below when a corrupt file imports zero variables.
 setenv rootdev
+setenv fdtfile
 if load ${devtype} ${devnum}:${distro_bootpart} ${load_addr} ${prefix}armbianEnv.txt; then
-	env import -t ${load_addr} ${filesize}
+	env import -t -r ${load_addr} ${filesize}
 fi
-if test -z "${rootdev}"; then
+# Defense in depth: probe the imported file by loading the DTB its
+# fdtfile points to. On failure (stale fdtfile from an older image,
+# typo, missing dtb) reload .dist, which restores all key vars (rootdev,
+# fdtfile, overlays, ...) from the clean baseline maintained by the
+# build hook and OTA sync.
+if load ${devtype} ${devnum}:${distro_bootpart} ${fdt_addr_r} ${prefix}dtb/${fdtfile}; then
+	true
+else
+	echo "WARNING: armbianEnv.txt fdtfile ${fdtfile} not loadable, loading .dist fallback"
+	setenv rootdev
+	setenv fdtfile
 	if load ${devtype} ${devnum}:${distro_bootpart} ${load_addr} ${prefix}armbianEnv.txt.dist; then
-		echo "WARNING: armbianEnv.txt corrupt, loading .dist fallback"
-		setenv rootdev
-		env import -t ${load_addr} ${filesize}
+		env import -t -r ${load_addr} ${filesize}
 	fi
+	load ${devtype} ${devnum}:${distro_bootpart} ${fdt_addr_r} ${prefix}dtb/${fdtfile}
 fi
 # Final safety: derive rootdev from boot source if still unset
 if test -z "${rootdev}"; then
-	echo "WARNING: rootdev not set, deriving from boot source ${devnum}:${distro_bootpart}"
-	setenv rootdev "/dev/mmcblk${devnum}p${distro_bootpart}"
+	echo "WARNING: rootdev not set, deriving from boot source ${devtype} ${devnum}:${distro_bootpart}"
+	if test "${devtype}" = "nvme"; then
+		setenv rootdev "/dev/nvme${devnum}n1p${distro_bootpart}"
+	else
+		setenv rootdev "/dev/mmcblk${devnum}p${distro_bootpart}"
+	fi
 fi
 
 # fdtfile is set by armbianEnv.txt (per-board BOOT_FDT_FILE).
 # EEPROM detection below will override it if a valid EEPROM is found.
 setenv eeprom_dtb_matched "no"
 
-# EEPROM format:
-#   [0..5]  = "rk35xx"
-#   [6..9]  = board code, e.g. 00A0 / 00B0
-#   [10.. ] = SN (ignored by boot logic)
-# Read EEPROM from i2c4@0x57 and override fdtfile if format matches.
+# Board identification EEPROM.
+# Content layout — the detection below parses only the first 10 bytes:
+#
+#   offset  size  field        notes                                     example
+#   0x00     6    magic        ASCII; blank (0xFF) chips never match     "rk35xx"
+#   0x06     4    board code   [0..1]=board no, [2..3]=hw iteration      "01A0"
+#   0x0A     20   serial no.   "SN" + ASCII digits                       "SNAAAAAAAAABBBBBBBBB"
+#   0x1E     2    reserved     not parsed                                0xFF 0xFF
+#   0x20     17   extra cfg    MAC ASCII "xx:xx:xx:xx:xx:xx" (ethaddr)   "AA:BB:CC:DD:EE:00"
+#   0x40     17   extra cfg    MAC ASCII "xx:xx:xx:xx:xx:xx" (eth1addr)  "AA:BB:CC:DD:EE:01"
+#
+# Board codes — actual EEPROM contents (first 10 bytes) per board:
+#   00A0 = RK3576 Devkit         72 6b 33 35 78 78 30 30 41 30  ("rk35xx"+"00A0")
+#   01A0 = RK3576 Module Dev Kit 72 6b 33 35 78 78 30 31 41 30  ("rk35xx"+"01A0")
+#   02A0 = RK3576 Industrial     72 6b 33 35 78 78 30 32 41 30  ("rk35xx"+"02A0")
+#   00B0 = RK3588 Devkit         72 6b 33 35 78 78 30 30 42 30  ("rk35xx"+"00B0")
+#
+# On magic/board-code mismatch (or a blank 0xFF chip) the default
+# ${fdtfile} stays in effect.
+#
+# Bus number and chip address are board-specific: set via armbianEnv.txt or
+# board hook (eeprom_i2c_bus / eeprom_i2c_addr).
+#   rk3576/rk3588 devkit: I2C4, 0x57 (on-board EEPROM)
+#   rk3576 module devkit: I2C2, 0x50 (on-module EEPROM)
+#   rk3576 industrial:    I2C2, 0x50 (on-module 24c32 EEPROM)
+test -n "${eeprom_i2c_bus}" || setenv eeprom_i2c_bus 4
+test -n "${eeprom_i2c_addr}" || setenv eeprom_i2c_addr 0x57
 if test "${eeprom_dtb_select}" = "on"; then
-	if i2c dev 4; then
-		if i2c read 0x57 0x0.2 10 ${load_addr}; then
+	if i2c dev ${eeprom_i2c_bus}; then
+		if i2c read ${eeprom_i2c_addr} 0x0.2 10 ${load_addr}; then
 			setexpr.b ee0 *${load_addr}
 			setexpr tmp ${load_addr} + 1
 			setexpr.b ee1 *${tmp}
@@ -82,6 +128,16 @@ if test "${eeprom_dtb_select}" = "on"; then
 					setenv fdtfile "rockchip/rk3576-recomputer-rk3576-devkit.dtb"
 					setenv eeprom_dtb_matched "yes"
 					echo "Detected board: reComputer RK3576 Devkit, using DTB: ${fdtfile}"
+				# 01A0 -> rk3576 module devkit dtb
+				elif test "${code0}" = "0x30" && test "${code1}" = "0x31" && test "${code2}" = "0x41" && test "${code3}" = "0x30"; then
+					setenv fdtfile "rockchip/rk3576-recomputer-rk3576-module-devkit.dtb"
+					setenv eeprom_dtb_matched "yes"
+					echo "Detected board: reComputer RK3576 Module Dev Kit, using DTB: ${fdtfile}"
+				# 02A0 -> rk3576 industrial dtb
+				elif test "${code0}" = "0x30" && test "${code1}" = "0x32" && test "${code2}" = "0x41" && test "${code3}" = "0x30"; then
+					setenv fdtfile "rockchip/rk3576-recomputer-industrial.dtb"
+					setenv eeprom_dtb_matched "yes"
+					echo "Detected board: reComputer RK3576 industrial, using DTB: ${fdtfile}"
 				# 00B0 -> rk3588 dtb
 				elif test "${code0}" = "0x30" && test "${code1}" = "0x30" && test "${code2}" = "0x42" && test "${code3}" = "0x30"; then
 					setenv fdtfile "rockchip/rk3588-recomputer-rk3588-devkit.dtb"
@@ -102,7 +158,7 @@ echo "Using fdtfile=${fdtfile}"
 if test "${logo}" = "disabled"; then setenv logo "logo.nologo"; fi
 
 if test "${console}" = "display" || test "${console}" = "both"; then setenv consoleargs "console=tty1"; fi
-if test "${console}" = "serial" || test "${console}" = "both"; then setenv consoleargs "console=ttyS2,1500000 ${consoleargs}"; fi
+if test "${console}" = "serial" || test "${console}" = "both"; then setenv consoleargs "console=ttyFIQ0,1500000n8 ${consoleargs}"; fi
 if test "${earlycon}" = "on"; then setenv consoleargs "earlycon ${consoleargs}"; fi
 if test "${bootlogo}" = "true"; then
 	setenv consoleargs "splash plymouth.ignore-serial-consoles ${consoleargs}"
@@ -110,10 +166,15 @@ else
 	setenv consoleargs "splash=verbose ${consoleargs}"
 fi
 
-# get PARTUUID of first partition on SD/eMMC the boot script was loaded from
+# get PARTUUID of the partition the boot script was loaded from
 if test "${devtype}" = "mmc"; then part uuid mmc ${devnum}:${distro_bootpart} partuuid; fi
+if test "${devtype}" = "nvme"; then part uuid nvme ${devnum}:${distro_bootpart} partuuid; fi
 
-setenv bootargs "root=${rootdev} rootwait rootfstype=${rootfstype} ${consoleargs} consoleblank=0 loglevel=${verbosity} ubootpart=${partuuid} usb-storage.quirks=${usbstoragequirks} ${extraargs} ${extraboardargs}"
+# ${devtype}/${devnum} still point at the disk this script was loaded from, so
+# they anchor initramfs root/userdata resolution when several disks carry
+# identical cloned images (duplicate PARTLABEL/UUID); without the token the
+# first-match scan may assemble the root from the wrong disk.
+setenv bootargs "root=${rootdev} rootwait rootfstype=${rootfstype} ${consoleargs} consoleblank=0 loglevel=${verbosity} ubootpart=${partuuid} usb-storage.quirks=${usbstoragequirks} armbian.bootdev=${devtype} armbian.bootdevnum=${devnum} ${extraargs} ${extraboardargs}"
 if test -n "${cryptdevice}"; then setenv bootargs "${bootargs} cryptdevice=${cryptdevice}"; fi
 
 if test "${docker_optimizations}" = "on"; then setenv bootargs "${bootargs} cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory"; fi
@@ -124,11 +185,17 @@ load ${devtype} ${devnum}:${distro_bootpart} ${kernel_addr_r} ${prefix}Image
 load ${devtype} ${devnum}:${distro_bootpart} ${fdt_addr_r} ${prefix}dtb/${fdtfile}
 fdt addr ${fdt_addr_r}
 fdt resize 65536
+# overlay_prefix holds one or more prefixes. The first match wins. Full overlay names also work.
 for overlay_file in ${overlays}; do
-	if load ${devtype} ${devnum}:${distro_bootpart} ${load_addr} ${prefix}dtb/rockchip/overlay/${overlay_prefix}-${overlay_file}.dtbo; then
-		echo "Applying kernel provided DT overlay ${overlay_prefix}-${overlay_file}.dtbo"
-		fdt apply ${load_addr} || setenv overlay_error "true"
-	elif load ${devtype} ${devnum}:${distro_bootpart} ${load_addr} ${prefix}dtb/rockchip/overlay/${overlay_file}.dtbo; then
+	setenv overlay_found "false"
+	for overlay_prefix_item in ${overlay_prefix}; do
+		if test "${overlay_found}" = "false" && test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}dtb/rockchip/overlay/${overlay_prefix_item}-${overlay_file}.dtbo && load ${devtype} ${devnum}:${distro_bootpart} ${load_addr} ${prefix}dtb/rockchip/overlay/${overlay_prefix_item}-${overlay_file}.dtbo; then
+			setenv overlay_found "true"
+			echo "Applying kernel provided DT overlay ${overlay_prefix_item}-${overlay_file}.dtbo"
+			fdt apply ${load_addr} || setenv overlay_error "true"
+		fi
+	done
+	if test "${overlay_found}" = "false" && test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}dtb/rockchip/overlay/${overlay_file}.dtbo && load ${devtype} ${devnum}:${distro_bootpart} ${load_addr} ${prefix}dtb/rockchip/overlay/${overlay_file}.dtbo; then
 		echo "Applying kernel provided DT overlay ${overlay_file}.dtbo"
 		fdt apply ${load_addr} || setenv overlay_error "true"
 	fi
@@ -143,11 +210,12 @@ if test "${overlay_error}" = "true"; then
 	echo "Error applying DT overlays, restoring original DT"
 	load ${devtype} ${devnum}:${distro_bootpart} ${fdt_addr_r} ${prefix}dtb/${fdtfile}
 else
-	if test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}dtb/rockchip/overlay/${overlay_prefix}-fixup.scr; then
-		load ${devtype} ${devnum}:${distro_bootpart} ${load_addr} ${prefix}dtb/rockchip/overlay/${overlay_prefix}-fixup.scr
-		echo "Applying kernel provided DT fixup script (${overlay_prefix}-fixup.scr)"
-		source ${load_addr}
-	fi
+	for overlay_prefix_item in ${overlay_prefix}; do
+		if test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}dtb/rockchip/overlay/${overlay_prefix_item}-fixup.scr && load ${devtype} ${devnum}:${distro_bootpart} ${load_addr} ${prefix}dtb/rockchip/overlay/${overlay_prefix_item}-fixup.scr; then
+			echo "Applying kernel provided DT fixup script (${overlay_prefix_item}-fixup.scr)"
+			source ${load_addr}
+		fi
+	done
 	if test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}fixup.scr; then
 		load ${devtype} ${devnum}:${distro_bootpart} ${load_addr} ${prefix}fixup.scr
 		echo "Applying user provided fixup script (fixup.scr)"
